@@ -14,8 +14,14 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9
-      - run: gradle :app:assembleDebug --no-daemon
+      - name: Build debug APK
+        run: |
+          DIR=$(dirname "$(find . -name settings.gradle.kts | head -n 1)")
+          echo "Building in $DIR"
+          echo "APK_DIR=$DIR" >> $GITHUB_ENV
+          cd "$DIR"
+          gradle :app:assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: IndoorMapper-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ env.APK_DIR }}/app/build/outputs/apk/debug/app-debug.apk
