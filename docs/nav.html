@@ -81,7 +81,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
 <script>
 {
-const VERSION = 'nav v2';
+const VERSION = 'nav v3';
 const $ = id => document.getElementById(id);
 
 // ---------- log ----------
@@ -224,11 +224,11 @@ $('importFile').onchange = async e => {
 // ---------- camera + model ----------
 const video = $('cam'); let stream = null, model = null, modelName = 'loading';
 $('camBtn').onclick = async () => {
+  if (!stream) startOrientation();          // must run inside the tap, before any await
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; $('camBtn').textContent = 'Start camera'; return; }
   try {
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
     video.srcObject = stream; await video.play(); $('camBtn').textContent = 'Stop camera'; log('camera on');
-    startOrientation();
   } catch (e) { setStatus(`Camera blocked: ${e.message}`); log(`camera error ${e.message}`); }
 };
 function normalise(v) { let n = 0; for (const x of v) n += x * x; n = Math.sqrt(n) || 1; for (let i = 0; i < v.length; i++) v[i] /= n; return v; }
@@ -259,13 +259,20 @@ function onMotion(e) {
   if (!above && accSmooth > 11.0 && t - lastStepT > 320) { steps++; lastStepT = t; above = true; }
   else if (above && accSmooth < 9.9) above = false;
 }
+let sensorsStarted = false, orientEvents = 0, motionEvents = 0;
 function startOrientation() {
-  window.addEventListener('devicemotion', onMotion);
-  const on = e => { if (e.alpha != null) gyro = headingFrom(e.alpha, e.beta, e.gamma); };
-  const go = () => { window.addEventListener('deviceorientation', on); log('orientation sensor on'); };
-  if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission)
-    DeviceOrientationEvent.requestPermission().then(r => r === 'granted' ? go() : log('orientation denied')).catch(e => log('orientation error ' + e));
-  else go();
+  if (sensorsStarted) return; sensorsStarted = true;
+  const on = e => { if (e.alpha != null) { gyro = headingFrom(e.alpha, e.beta, e.gamma); orientEvents++; } };
+  const mo = e => { motionEvents++; onMotion(e); };
+  // listen regardless; permission prompts (where they exist) are requested in the same tap
+  window.addEventListener('deviceorientation', on);
+  window.addEventListener('devicemotion', mo);
+  try { if (DeviceOrientationEvent.requestPermission) DeviceOrientationEvent.requestPermission().then(r => log('orientation permission: ' + r)).catch(e => log('orientation permission error: ' + e.message)); } catch (e) {}
+  try { if (DeviceMotionEvent.requestPermission) DeviceMotionEvent.requestPermission().then(r => log('motion permission: ' + r)).catch(e => log('motion permission error: ' + e.message)); } catch (e) {}
+  setTimeout(() => {
+    log(`sensors after 3 s: orientation events ${orientEvents}, motion events ${motionEvents}`);
+    if (!orientEvents) setStatus('Motion sensors are blocked: the arrow will not turn with you. In Chrome: Settings → Site settings → Motion sensors → Allow, then reload.');
+  }, 3000);
 }
 
 // ---------- record ----------
@@ -292,8 +299,9 @@ $('dest').onchange = () => { hist.length = 0; arrived = false; log(`--- destinat
 const hist = [];          // recent best view keys
 let here = null;          // { place, facing, heading } last confirmed
 let fixGyro = null, fixHeading = null, lastFixAt = 0, arrived = false, lastLogged = '';
-$('markRight').onclick = () => log(`USER: arrow RIGHT (${lastLogged})`);
-$('markWrong').onclick = () => log(`USER: arrow WRONG (${lastLogged})`);
+const ctx = () => here ? `${here.place} facing ${here.facing}, plan heading ${(currentHeading() ?? -1).toFixed(0)}, gyro ${gyro == null ? 'off' : gyro.toFixed(0)}, steps ${steps} | ${lastLogged}` : 'no fix yet';
+$('markRight').onclick = () => log(`USER: arrow RIGHT (${ctx()})`);
+$('markWrong').onclick = () => log(`USER: arrow WRONG (${ctx()})`);
 
 function bestView(v) {
   const best = {};
@@ -322,7 +330,9 @@ function navigateStep(v) {
   const [place, facing] = winKey.split('|');
 
   // accept a fix: confident, and either plausible or very confident (re-localise after e.g. a restart)
-  if (hist.length >= 5 && (conf >= 0.67 && plausible(place) || conf >= 0.89)) {
+  const sameRoomTurn = here && here.place === place && here.facing !== facing;
+  const need = sameRoomTurn ? 0.78 : 0.67;
+  if (hist.length >= 5 && (conf >= need && plausible(place) || conf >= 0.89)) {
     const w = views.find(x => key(x) === winKey);
     if (!here || here.place !== place || here.facing !== facing) log(`FIX ${place} facing ${facing} (${Math.round(conf * 100)}%, score ${r[0].s.toFixed(3)})`);
     if (!here || here.place !== place) log(`steps ${steps} total`);
@@ -398,7 +408,7 @@ function render() {
   const verb = kind === 'stair' ? (nodeZ(next) > nodeZ(N[here.place]) ? 'Take the stairs up' : 'Take the stairs down')
     : next.type === 'door' || next.type === 'opening' ? `Go through the door to ${nameOf(nextPlace)}` : `Go to ${nameOf(nextPlace)}`;
   const dir = Math.abs(turn) < 25 ? 'ahead' : Math.abs(turn) > 150 ? 'behind you' : turn > 0 ? 'on your right' : 'on your left';
-  $('instr').innerHTML = `${verb}<small>${dir} · you're in ${nameOf(here.place)} · ${r.dist.toFixed(0)} m to go${age > 8 ? ' · point the phone ahead to refresh' : ''}</small>`;
+  $('instr').innerHTML = `${verb}<small>${dir} · ${r.dist.toFixed(0)} m to go${age > 8 ? ' · point the phone ahead to refresh' : ''}</small><small>I think: in ${nameOf(here.place)}, facing ${nameOf(here.facing)}${gyro == null ? ' · sensors off' : ''}</small>`;
   $('routeText').textContent = 'Route: ' + placesOn(r.path).map(nameOf).join(' → ');
   drawPlan(r, h);
   const walked = (steps - stepsAtFix) * STEP_M;
