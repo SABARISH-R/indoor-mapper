@@ -1,0 +1,128 @@
+{
+  "schema": "navgraph/1",
+  "building": "proto-house",
+  "status": "plan-derived; every pos is provisional until the on-site survey pass",
+  "frame": {
+    "origin": "south-west outer corner of the 10.18 x 9.84 m envelope, ground floor finished level",
+    "axes": "x = east, y = north, z = up",
+    "units": "m",
+    "unity": "Unity position = (x, z, y)"
+  },
+  "envelope": {"x": 10.18, "y": 9.84, "wallThickness": 0.24},
+  "doorTypes": {"D": 1.00, "D1": 0.90, "D2": 0.75, "heightM": 2.10},
+  "floors": [
+    {"id": "G",  "z": 0.00},
+    {"id": "F1", "z": 3.23, "zProvisional": true, "zNote": "19 risers x 0.17 read from the drawing (about 9 + 8 treads); count the risers on site"}
+  ],
+  "nodes": [
+    {"id": "G.approach",            "floor": "G", "type": "outdoor",  "pos": [4.60, -0.60]},
+    {"id": "G.door.main",           "floor": "G", "type": "opening",  "pos": [4.60, 0.10], "width": 1.18},
+    {"id": "G.sitout",              "floor": "G", "type": "room",     "pos": [5.08, 1.01], "bounds": [3.56, 0.24, 6.62, 1.79], "name": "Sitout"},
+    {"id": "G.door.sitout_hall",    "floor": "G", "type": "door",     "pos": [3.98, 1.92], "door": "D"},
+    {"id": "G.hall.sw",             "floor": "G", "type": "waypoint", "pos": [4.20, 2.60]},
+    {"id": "G.hall",                "floor": "G", "type": "room",     "pos": [5.08, 4.29], "bounds": [3.56, 2.03, 6.62, 6.55], "name": "Hall"},
+    {"id": "G.hall.nw",             "floor": "G", "type": "waypoint", "pos": [4.20, 5.58]},
+    {"id": "G.door.hall_dining",    "floor": "G", "type": "door",     "pos": [3.44, 5.58], "door": "D1"},
+    {"id": "G.dining",              "floor": "G", "type": "room",     "pos": [2.19, 5.56], "bounds": [0.24, 2.03, 3.32, 6.86], "name": "Dining", "note": "includes the stair strip along its south side"},
+    {"id": "G.open.dining_kitchenA","floor": "G", "type": "opening",  "pos": [1.74, 6.98], "width": 2.40},
+    {"id": "G.kitchenA",            "floor": "G", "type": "room",     "pos": [1.78, 8.35], "bounds": [0.24, 7.10, 3.32, 9.59], "name": "Kitchen A"},
+    {"id": "G.door.kitchenA_kitchenB","floor": "G","type": "door",    "pos": [3.44, 8.24], "door": "D1"},
+    {"id": "G.kitchenB",            "floor": "G", "type": "room",     "pos": [5.08, 8.19], "bounds": [3.56, 6.79, 6.62, 9.59], "name": "Kitchen B"},
+    {"id": "G.door.kitchenB_wash",  "floor": "G", "type": "door",     "pos": [6.74, 7.33], "door": "D1"},
+    {"id": "G.wash",                "floor": "G", "type": "room",     "pos": [7.41, 8.19], "bounds": [6.86, 6.79, 7.96, 9.59], "name": "Wash"},
+    {"id": "G.door.wash_wc",        "floor": "G", "type": "door",     "pos": [8.05, 7.25], "door": "D2"},
+    {"id": "G.wc",                  "floor": "G", "type": "room",     "pos": [9.04, 8.19], "bounds": [8.14, 6.79, 9.95, 9.59], "name": "WC"},
+    {"id": "G.door.hall_bedA",      "floor": "G", "type": "door",     "pos": [6.74, 4.02], "door": "D1"},
+    {"id": "G.bedroomA",            "floor": "G", "type": "room",     "pos": [8.40, 5.05], "bounds": [6.86, 3.55, 9.95, 6.55], "name": "Bedroom A"},
+    {"id": "G.door.hall_bedB",      "floor": "G", "type": "door",     "pos": [6.74, 2.78], "door": "D1"},
+    {"id": "G.bedroomB",            "floor": "G", "type": "room",     "pos": [8.40, 1.78], "bounds": [6.86, 0.24, 9.95, 3.31], "name": "Bedroom B"},
+    {"id": "G.stair.bottom",        "floor": "G", "type": "stair_landing", "pos": [0.69, 5.60]},
+
+    {"id": "S.landing",             "floor": null, "type": "stair_landing", "pos": [0.74, 2.45], "z": 1.70, "zProvisional": true, "bounds": [0.24, 2.03, 1.23, 2.86], "turnDeg": 90, "turn": "left when ascending"},
+
+    {"id": "F1.stairwell",          "floor": "F1", "type": "room",     "pos": [1.78, 4.45], "bounds": [0.24, 2.03, 3.32, 6.86], "name": "Stairwell (open void)", "void": true, "walkable": false},
+    {"id": "F1.stair.top",          "floor": "F1", "type": "stair_landing", "pos": [3.20, 2.45]},
+    {"id": "F1.door.stair_hall",    "floor": "F1", "type": "door",     "pos": [3.44, 2.45], "door": "D1"},
+    {"id": "F1.hall.sw",            "floor": "F1", "type": "waypoint", "pos": [4.20, 2.45]},
+    {"id": "F1.hall.s",             "floor": "F1", "type": "waypoint", "pos": [6.14, 2.60]},
+    {"id": "F1.hall",               "floor": "F1", "type": "room",     "pos": [5.08, 4.45], "bounds": [3.56, 2.03, 6.62, 6.86], "name": "Hall"},
+    {"id": "F1.door.hall_bedA",     "floor": "F1", "type": "door",     "pos": [4.05, 6.98], "door": "D1"},
+    {"id": "F1.bedroomA",           "floor": "F1", "type": "room",     "pos": [5.66, 8.35], "bounds": [3.56, 7.10, 7.76, 9.59], "name": "Bedroom A"},
+    {"id": "F1.door.bedA_terrace",  "floor": "F1", "type": "door",     "pos": [3.43, 8.79], "door": "D1"},
+    {"id": "F1.terrace",            "floor": "F1", "type": "room",     "pos": [1.78, 8.35], "bounds": [0.24, 7.10, 3.31, 9.59], "name": "Roof / Terrace", "outdoor": true, "confidence": "low", "note": "extent to confirm; keep routes away from edges"},
+    {"id": "F1.door.bedA_wcA",      "floor": "F1", "type": "door",     "pos": [7.88, 8.82], "door": "D2"},
+    {"id": "F1.wcA",                "floor": "F1", "type": "room",     "pos": [8.97, 9.01], "bounds": [8.00, 8.42, 9.95, 9.59], "name": "WC A"},
+    {"id": "F1.door.hall_bedB",     "floor": "F1", "type": "door",     "pos": [6.74, 5.99], "door": "D1"},
+    {"id": "F1.bedroomB",           "floor": "F1", "type": "room",     "pos": [8.40, 4.45], "bounds": [6.86, 2.03, 9.95, 6.86], "name": "Bedroom B"},
+    {"id": "F1.door.bedB_wcB",      "floor": "F1", "type": "door",     "pos": [8.62, 6.98], "door": "D2"},
+    {"id": "F1.wcB",                "floor": "F1", "type": "room",     "pos": [8.97, 7.68], "bounds": [8.00, 7.10, 9.95, 8.27], "name": "WC B"},
+    {"id": "F1.door.hall_balcony",  "floor": "F1", "type": "door",     "pos": [6.14, 1.92], "door": "D1"},
+    {"id": "F1.balcony",            "floor": "F1", "type": "room",     "pos": [6.75, 1.01], "bounds": [3.56, 0.24, 9.95, 1.79], "name": "Balcony", "outdoor": true, "confidence": "low"}
+  ],
+  "edges": [
+    ["G.approach", "G.door.main"],
+    ["G.door.main", "G.sitout"],
+    ["G.sitout", "G.door.sitout_hall"],
+    ["G.door.sitout_hall", "G.hall.sw"],
+    ["G.hall.sw", "G.hall"],
+    ["G.hall.sw", "G.hall.nw"],
+    ["G.hall.sw", "G.door.hall_bedB"],
+    ["G.hall.nw", "G.hall"],
+    ["G.hall.nw", "G.door.hall_dining"],
+    ["G.hall", "G.door.hall_bedA"],
+    ["G.hall", "G.door.hall_bedB"],
+    ["G.door.hall_bedA", "G.bedroomA"],
+    ["G.door.hall_bedB", "G.bedroomB"],
+    ["G.door.hall_dining", "G.dining"],
+    ["G.dining", "G.stair.bottom"],
+    ["G.dining", "G.open.dining_kitchenA"],
+    ["G.open.dining_kitchenA", "G.kitchenA"],
+    ["G.kitchenA", "G.door.kitchenA_kitchenB"],
+    ["G.door.kitchenA_kitchenB", "G.kitchenB"],
+    ["G.kitchenB", "G.door.kitchenB_wash"],
+    ["G.door.kitchenB_wash", "G.wash"],
+    ["G.wash", "G.door.wash_wc"],
+    ["G.door.wash_wc", "G.wc"],
+
+    ["F1.stair.top", "F1.door.stair_hall"],
+    ["F1.door.stair_hall", "F1.hall.sw"],
+    ["F1.hall.sw", "F1.hall"],
+    ["F1.hall.sw", "F1.hall.s"],
+    ["F1.hall.s", "F1.hall"],
+    ["F1.hall.s", "F1.door.hall_balcony"],
+    ["F1.door.hall_balcony", "F1.balcony"],
+    ["F1.hall", "F1.door.hall_bedA"],
+    ["F1.hall", "F1.door.hall_bedB"],
+    ["F1.door.hall_bedA", "F1.bedroomA"],
+    ["F1.bedroomA", "F1.door.bedA_terrace"],
+    ["F1.door.bedA_terrace", "F1.terrace"],
+    ["F1.bedroomA", "F1.door.bedA_wcA"],
+    ["F1.door.bedA_wcA", "F1.wcA"],
+    ["F1.door.hall_bedB", "F1.bedroomB"],
+    ["F1.bedroomB", "F1.door.bedB_wcB"],
+    ["F1.door.bedB_wcB", "F1.wcB"]
+  ],
+  "connectors": [
+    {
+      "id": "STAIR.1", "type": "stair", "accessible": false,
+      "tread": 0.25, "rise": 0.17, "width": 0.90,
+      "shape": "quarter-turn (L) as drawn: flight 1 runs south along the west wall, corner landing in the SW, flight 2 runs east to the first-floor hall door",
+      "flights": [
+        {"from": "G.stair.bottom", "to": "S.landing",    "start": [0.69, 5.28], "end": [0.69, 3.02], "headingDeg": 180, "treadsFromDrawing": 9, "risersEstimated": 10},
+        {"from": "S.landing",      "to": "F1.stair.top", "start": [1.23, 2.45], "end": [3.32, 2.45], "headingDeg": 90,  "treadsFromDrawing": 8, "risersEstimated": 9}
+      ],
+      "landingFraction": 0.53,
+      "note": "no top landing is drawn before the F1 hall door; confirm on site"
+    }
+  ],
+  "anchors": [
+    {"id": "A.G.entry", "floor": "G",  "image": "marker_g_entry",  "pos": [6.62, 1.04], "heightM": 1.40, "normalDeg": 270, "sizeM": 0.18, "surveyed": false, "mount": "Sitout east wall, facing west; seen on arrival from the main approach"},
+    {"id": "A.F1.stair","floor": "F1", "image": "marker_f1_stair", "pos": [6.62, 2.45], "heightM": 1.40, "normalDeg": 270, "sizeM": 0.18, "surveyed": false, "mount": "F1 Hall east wall, directly opposite the stair door"}
+  ],
+  "conventions": {
+    "headingDeg": "compass-style in the building frame: 0 = +y (north), 90 = +x (east)",
+    "normalDeg": "direction the marker faces, same convention",
+    "bounds": "[xMin, yMin, xMax, yMax] interior clear area",
+    "edges": "undirected walkable segments; length is computed at load time"
+  }
+}
