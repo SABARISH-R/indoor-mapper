@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AR Nav – pin test</title>
+<style>
+  :root { --bg:#0e1a24; --ink:#eef3f6; --muted:#9fb3c1; --accent:#ffb02e; --ok:#3ddc84; --bad:#ff5a5a; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink); font:16px/1.45 system-ui, sans-serif; }
+  #intro { max-width:560px; margin:0 auto; padding:28px 20px; }
+  h1 { font-size:28px; margin:0 0 8px; }
+  p, li { color:var(--muted); }
+  button { font:600 17px system-ui; border:0; border-radius:12px; padding:14px 18px; min-height:48px; background:var(--accent); color:#1b1300; }
+  button.sec { background:#22384a; color:var(--ink); }
+  button:disabled { opacity:.45; }
+  #status { margin:14px 0; padding:12px 14px; border-radius:10px; background:#162838; }
+  /* AR overlay (shown inside the AR session) */
+  #overlay { position:fixed; inset:0; display:none; pointer-events:none; }
+  #overlay.on { display:block; }
+  #hud { position:absolute; top:0; left:0; right:0; padding:12px 14px; background:linear-gradient(#000c,#0000); font:600 15px/1.35 system-ui; white-space:pre-line; text-shadow:0 1px 2px #000; }
+  #cross { position:absolute; left:50%; top:50%; width:34px; height:34px; margin:-17px 0 0 -17px; border:2px solid #fff; border-radius:50%; box-shadow:0 0 4px #000; }
+  #cross.hit { border-color:var(--ok); }
+  #bar { position:absolute; left:0; right:0; bottom:0; display:flex; gap:8px; padding:12px; padding-bottom:max(12px, env(safe-area-inset-bottom)); background:linear-gradient(#0000,#000c); pointer-events:auto; }
+  #bar button { flex:1; }
+  #log { margin-top:18px; max-height:40vh; overflow:auto; font:12px/1.4 ui-monospace, monospace; background:#08121a; padding:10px; border-radius:8px; white-space:pre-wrap; color:#b9cbd6; }
+</style>
+</head>
+<body>
+<div id="intro">
+  <h1>AR Nav – pin test</h1>
+  <p>Checks that pins stay where you put them. Open in <b>Chrome on Android</b>.</p>
+  <ol>
+    <li>Tap <b>Start AR</b>, allow the camera.</li>
+    <li>Move the phone slowly over the floor until the circle turns green.</li>
+    <li>Tap <b>Drop pin</b> with the circle on a tile corner.</li>
+    <li>Walk 3 m away slowly, come back, and see whether the pin is still on the corner.</li>
+    <li>Tap <b>Exit</b>, then <b>Copy log</b>, and paste it to Claude.</li>
+  </ol>
+  <div id="status">Checking AR support…</div>
+  <button id="start" disabled>Start AR</button>
+  <button id="copy" class="sec">Copy log</button>
+  <div id="log"></div>
+</div>
+
+<div id="overlay">
+  <div id="hud">Starting…</div>
+  <div id="cross"></div>
+  <div id="bar">
+    <button id="drop">Drop pin</button>
+    <button id="clear" class="sec">Clear</button>
+    <button id="exit" class="sec">Exit</button>
+  </div>
+</div>
+
+<script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }</script>
+<script type="module">
+import * as THREE from 'three';
+
+const $ = id => document.getElementById(id);
+const VERSION = 'pin-test v1';
+
+// ---------- logging (kept across reloads so a crash doesn't lose it) ----------
+const lines = [];
+try { lines.push(...JSON.parse(localStorage.getItem('arnavLog') || '[]').slice(-300)); } catch {}
+function log(msg) {
+  const line = `${new Date().toISOString().slice(11, 23)} ${msg}`;
+  lines.push(line);
+  if (lines.length > 400) lines.splice(0, lines.length - 400);
+  try { localStorage.setItem('arnavLog', JSON.stringify(lines)); } catch {}
+  $('log').textContent = lines.slice(-60).join('\n');
+  console.log(line);
+}
+window.addEventListener('error', e => log(`ERROR ${e.message} @${e.lineno}`));
+window.addEventListener('unhandledrejection', e => log(`ERROR ${e.reason}`));
+
+$('copy').onclick = async () => {
+  const text = [`${VERSION} | ${navigator.userAgent}`, ...lines].join('\n');
+  try { await navigator.clipboard.writeText(text); $('status').textContent = 'Log copied. Paste it to Claude.'; }
+  catch { $('status').textContent = 'Copy failed; long-press the log below and copy it.'; }
+};
+
+// ---------- support check ----------
+log(`--- ${VERSION} loaded`);
+if (!navigator.xr) {
+  $('status').textContent = 'WebXR not available. Use Chrome on Android, and install/update "Google Play Services for AR".';
+  log('no navigator.xr');
+} else {
+  navigator.xr.isSessionSupported('immersive-ar').then(ok => {
+    $('status').textContent = ok ? 'AR supported. Tap Start AR.' : 'This browser cannot start AR. Update Chrome and "Google Play Services for AR".';
+    $('start').disabled = !ok;
+    log(`immersive-ar supported: ${ok}`);
+  });
+}
+
+// ---------- three.js ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.xr.enabled = true;
+document.body.appendChild(renderer.domElement);
+renderer.domElement.style.display = 'none';
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera();
+scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 2.5));
+
+const reticle = new THREE.Mesh(
+  new THREE.RingGeometry(0.06, 0.08, 32).rotateX(-Math.PI / 2),
+  new THREE.MeshBasicMaterial({ color: 0x3ddc84 }));
+reticle.matrixAutoUpdate = false;
+reticle.visible = false;
+scene.add(reticle);
+
+function makePin(n) {
+  const g = new THREE.Group();
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.5, 16),
+                              new THREE.MeshStandardMaterial({ color: 0xffb02e }));
+  post.position.y = 0.25;
+  const base = new THREE.Mesh(new THREE.RingGeometry(0.03, 0.06, 32).rotateX(-Math.PI / 2),
+                              new THREE.MeshBasicMaterial({ color: 0xff5a5a, side: THREE.DoubleSide }));
+  base.position.y = 0.003;
+  g.add(post, base);
+  g.matrixAutoUpdate = false;
+  g.name = `pin${n}`;
+  return g;
+}
+
+// ---------- AR session ----------
+let session = null, refSpace = null, hitSource = null, lastHit = null;
+const pins = [];           // { n, anchor, mesh, first: Vector3, last: Vector3, lostFrames }
+let frames = 0, lostFrames = 0, wasLost = false, startCam = null, pathLen = 0, lastCam = null;
+
+$('start').onclick = async () => {
+  try {
+    session = await navigator.xr.requestSession('immersive-ar', {
+      requiredFeatures: ['hit-test', 'anchors'],
+      optionalFeatures: ['dom-overlay'],
+      domOverlay: { root: $('overlay') },
+    });
+  } catch (e) {
+    log(`requestSession failed: ${e.name} ${e.message}`);
+    $('status').textContent = `Could not start AR: ${e.message}`;
+    return;
+  }
+  log(`session started; domOverlay=${session.domOverlayState ? session.domOverlayState.type : 'none'}`);
+  $('overlay').classList.add('on');
+  renderer.domElement.style.display = 'block';
+  renderer.xr.setReferenceSpaceType('local');
+  await renderer.xr.setSession(session);
+  refSpace = renderer.xr.getReferenceSpace();
+  const viewer = await session.requestReferenceSpace('viewer');
+  hitSource = await session.requestHitTestSource({ space: viewer });
+  session.addEventListener('end', onEnd);
+  renderer.setAnimationLoop(onFrame);
+};
+
+function onEnd() {
+  log(`session ended. frames=${frames} lostFrames=${lostFrames} pins=${pins.length}`);
+  pins.forEach(reportPin);
+  renderer.setAnimationLoop(null);
+  hitSource = null; session = null;
+  $('overlay').classList.remove('on');
+  renderer.domElement.style.display = 'none';
+  $('status').textContent = 'AR ended. Tap Copy log and paste it to Claude.';
+}
+
+function reportPin(p) {
+  const moved = p.last && p.first ? p.last.distanceTo(p.first) : NaN;
+  log(`pin${p.n}: anchor moved ${(moved * 100).toFixed(1)} cm since drop (ARCore corrections); lost-anchor frames ${p.lostFrames}`);
+}
+
+$('exit').onclick = () => session && session.end();
+$('clear').onclick = () => {
+  pins.forEach(p => { p.anchor.delete && p.anchor.delete(); scene.remove(p.mesh); });
+  pins.length = 0;
+  log('pins cleared');
+};
+
+$('drop').onclick = async () => {
+  if (!lastHit) { log('drop: no floor under the circle'); return; }
+  const n = pins.length + 1;
+  try {
+    const anchor = await lastHit.createAnchor();
+    const mesh = makePin(n);
+    scene.add(mesh);
+    pins.push({ n, anchor, mesh, first: null, last: null, lostFrames: 0 });
+    log(`pin${n} dropped (anchor created)`);
+  } catch (e) {
+    log(`pin${n} createAnchor failed: ${e.message}`);
+  }
+};
+
+const m = new THREE.Matrix4(), v = new THREE.Vector3();
+
+function onFrame(time, frame) {
+  if (!frame) return;
+  frames++;
+  const pose = frame.getViewerPose(refSpace);
+
+  // tracking state
+  const lost = !pose || pose.emulatedPosition;
+  if (lost) lostFrames++;
+  if (lost !== wasLost) { log(lost ? 'TRACKING LOST' : 'tracking resumed'); wasLost = lost; }
+
+  let cam = null;
+  if (pose) {
+    const p = pose.transform.position;
+    cam = new THREE.Vector3(p.x, p.y, p.z);
+    if (!startCam) startCam = cam.clone();
+    if (lastCam) { const d = Math.hypot(cam.x - lastCam.x, cam.z - lastCam.z); if (d > 0.01) { pathLen += d; lastCam = cam; } }
+    else lastCam = cam;
+  }
+
+  // floor under the crosshair
+  lastHit = null;
+  if (hitSource) {
+    const hits = frame.getHitTestResults(hitSource);
+    if (hits.length) {
+      const hp = hits[0].getPose(refSpace);
+      if (hp) { lastHit = hits[0]; reticle.visible = true; reticle.matrix.fromArray(hp.transform.matrix); }
+    } else reticle.visible = false;
+  }
+  $('cross').classList.toggle('hit', !!lastHit);
+
+  // pins follow their anchors (ARCore moves anchors as its map improves)
+  for (const p of pins) {
+    if (!frame.trackedAnchors || !frame.trackedAnchors.has(p.anchor)) { p.lostFrames++; continue; }
+    const ap = frame.getPose(p.anchor.anchorSpace, refSpace);
+    if (!ap) { p.lostFrames++; continue; }
+    p.mesh.matrix.fromArray(ap.transform.matrix);
+    v.setFromMatrixPosition(p.mesh.matrix);
+    if (!p.first) p.first = v.clone();
+    p.last = v.clone();
+  }
+
+  // HUD
+  if (frames % 10 === 0) {
+    const lines = [lost ? 'TRACKING LOST - move slowly, point at textured areas' : 'Tracking OK',
+                   `walked ${pathLen.toFixed(1)} m | lost frames ${lostFrames}`];
+    for (const p of pins) {
+      if (!p.last || !cam) continue;
+      const d = Math.hypot(p.last.x - cam.x, p.last.z - cam.z);
+      lines.push(`pin${p.n}: ${d.toFixed(2)} m away, anchor shift ${(p.last.distanceTo(p.first) * 100).toFixed(1)} cm`);
+    }
+    if (!lastHit) lines.push('Point the circle at the floor');
+    $('hud').textContent = lines.join('\n');
+  }
+  if (frames % 300 === 0) log(`t=${(time / 1000).toFixed(0)}s walked=${pathLen.toFixed(1)}m lost=${lostFrames} pins=${pins.map(p => p.last && p.first ? (p.last.distanceTo(p.first) * 100).toFixed(1) + 'cm' : '-').join(',')}`);
+
+  renderer.render(scene, camera);
+}
+</script>
+</body>
+</html>
