@@ -40,6 +40,7 @@
     <li><b>Exit</b> → <b>Copy log</b> → paste it to Claude.</li>
   </ol>
   <div id="status">Checking AR support…</div>
+  <p style="font-size:13px">This page: <b id="ver"></b>. If it is not the version Claude mentioned, reload.</p>
   <div class="row">
     <button id="start" disabled>Start AR</button>
     <button id="copy" class="sec">Copy log</button>
@@ -55,6 +56,7 @@
   <div id="bar">
     <button id="drop">Drop</button>
     <button id="check">Check</button>
+    <button id="measure">Measure</button>
     <button id="clear" class="sec">Clear</button>
     <button id="exit" class="sec">Exit</button>
   </div>
@@ -65,7 +67,7 @@
 import * as THREE from 'three';
 
 const $ = id => document.getElementById(id);
-const VERSION = 'pin-test v5';
+const VERSION = 'pin-test v6';
 
 // ---------- logging ----------
 let lines = [];
@@ -85,6 +87,7 @@ $('copy').onclick = async () => {
 };
 $('clearlog').onclick = () => { lines = []; saveLog(); $('status').textContent = 'Log cleared.'; };
 saveLog();
+$('ver').textContent = VERSION;
 
 // ---------- support check ----------
 log(`--- ${VERSION} loaded`);
@@ -151,6 +154,7 @@ $('start').onclick = async () => {
   renderer.xr.setReferenceSpaceType('local');
   await renderer.xr.setSession(session);
   refSpace = renderer.xr.getReferenceSpace();
+  try { refSpace.addEventListener('reset', e => log(`REFERENCE SPACE RESET${e.transform ? ' (offset given)' : ''}`)); } catch {}
   const viewer = await session.requestReferenceSpace('viewer');
   try { hitSource = await session.requestHitTestSource({ space: viewer, entityTypes: ['plane', 'point'] }); log('hit-test: planes + points'); }
   catch (e) { hitSource = await session.requestHitTestSource({ space: viewer }); log('hit-test: planes only'); }
@@ -171,6 +175,21 @@ function onEnd() {
 $('exit').onclick = () => session && session.end();
 $('drop').onclick = () => { action = 'drop'; };
 $('check').onclick = () => { action = 'check'; };
+let measureFrom = null, measurePath0 = 0;
+$('measure').onclick = () => {
+  if (!cam) return;
+  if (!measureFrom) {
+    measureFrom = cam.clone(); measurePath0 = pathLen;
+    $('measure').textContent = 'Stop';
+    log(`MEASURE start, jumps so far ${jumps}`); flash('Measuring: walk, then tap Stop');
+  } else {
+    const straight = Math.hypot(cam.x - measureFrom.x, cam.z - measureFrom.z);
+    const height = cam.y - measureFrom.y;
+    log(`MEASURE stop: straight ${straight.toFixed(2)} m, path ${(pathLen - measurePath0).toFixed(2)} m, height change ${height.toFixed(2)} m, jumps so far ${jumps}`);
+    flash(`Phone says ${straight.toFixed(2)} m (height ${height >= 0 ? '+' : ''}${height.toFixed(2)} m)`);
+    measureFrom = null; $('measure').textContent = 'Measure';
+  }
+};
 $('clear').onclick = () => { for (const p of pins) { try { p.anchor.delete(); } catch {} scene.remove(p.mesh); } pins.length = 0; log('pins cleared'); flash('Pins cleared'); };
 
 async function doDrop(frame) {
