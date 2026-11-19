@@ -65,7 +65,7 @@
 import * as THREE from 'three';
 
 const $ = id => document.getElementById(id);
-const VERSION = 'pin-test v3';
+const VERSION = 'pin-test v4';
 
 // ---------- logging ----------
 let lines = [];
@@ -131,7 +131,7 @@ let target = null, targetKind = 'none';   // point under the circle: 'surface' |
 let lastHit = null;
 const pins = [];                  // { n, anchor, mesh, first, last, est, pathAtDrop }
 const path = [];                  // walked positions (x, z) every 10 cm
-let frames = 0, lostFrames = 0, wasLost = false, pathLen = 0, cam = null, camFwd = null;
+let frames = 0, lostFrames = 0, wasLost = false, pathLen = 0, cam = null, camFwd = null, jumps = 0, prevCam = null;
 let action = null;                // 'drop' | 'check', run inside the next AR frame
 let flashText = '', flashUntil = 0;
 function flash(t) { flashText = t; flashUntil = performance.now() + 2500; try { navigator.vibrate && navigator.vibrate(50); } catch {} }
@@ -143,6 +143,7 @@ $('start').onclick = async () => {
       requiredFeatures: ['hit-test', 'anchors'], optionalFeatures: ['dom-overlay'], domOverlay: { root: $('overlay') } });
   } catch (e) { log(`requestSession failed: ${e.message}`); $('status').textContent = `Could not start AR: ${e.message}`; return; }
   log('session started');
+  for (const p of pins) scene.remove(p.mesh); pins.length = 0; path.length = 0; pathLen = 0; jumps = 0; prevCam = null; floorY = null;
   $('overlay').classList.add('on');
   renderer.domElement.style.display = 'block';
   renderer.xr.setReferenceSpaceType('local');
@@ -187,12 +188,13 @@ async function doDrop(frame) {
 }
 
 function doCheck() {
-  const p = pins[pins.length - 1];
-  if (!p || !p.last) { flash('Drop a pin first'); return; }
   if (!target) { flash('Point the circle at the real spot'); return; }
+  let p = null, best = Infinity;
+  for (const q of pins) if (q.last) { const d = Math.hypot(q.last.x - target.x, q.last.z - target.z); if (d < best) { best = d; p = q; } }
+  if (!p) { flash('Drop a pin first'); return; }
   const d = Math.hypot(p.last.x - target.x, p.last.z - target.z) * 100;
   const walked = (pathLen - p.pathAtDrop).toFixed(1);
-  log(`CHECK pin${p.n}: real drift ${d.toFixed(1)} cm after ${walked} m walked (aimed with ${targetKind} floor)`);
+  log(`CHECK pin${p.n}: real drift ${d.toFixed(1)} cm after ${walked} m walked, ${jumps} tracking jumps so far (aimed with ${targetKind} floor)`);
   flash(`Pin ${p.n} is ${d.toFixed(0)} cm from the real spot`);
 }
 
@@ -211,6 +213,11 @@ function onFrame(time, frame) {
     const p = pose.transform.position, q = pose.transform.orientation;
     cam = new THREE.Vector3(p.x, p.y, p.z);
     camFwd = new THREE.Vector3(0, 0, -1).applyQuaternion(new THREE.Quaternion(q.x, q.y, q.z, q.w));
+    if (prevCam) {
+      const step = cam.distanceTo(prevCam);
+      if (step > 0.3) { jumps++; log(`JUMP: position snapped ${step.toFixed(2)} m in one frame (tracking reset)`); flash(`Tracking jumped ${step.toFixed(1)} m - pins now unreliable`); }
+    }
+    prevCam = cam.clone();
     const lastP = path[path.length - 1];
     if (!lastP) path.push({ x: cam.x, z: cam.z });
     else { const d = Math.hypot(cam.x - lastP.x, cam.z - lastP.z); if (d > 0.1) { pathLen += d; path.push({ x: cam.x, z: cam.z }); if (path.length > 3000) path.shift(); } }
@@ -259,7 +266,7 @@ function drawHud(lost) {
   const out = [lost ? 'TRACKING LOST - move slowly' : 'Tracking OK',
     targetKind === 'surface' ? 'Floor: detected (green)' : targetKind === 'estimated' ? 'Floor: remembered (yellow)' :
       floorY == null ? 'Floor: sweep slowly, phone tilted down' : 'Floor: aim lower',
-    `walked ${pathLen.toFixed(1)} m`];
+    `walked ${pathLen.toFixed(1)} m | jumps ${jumps}`];
   for (const p of pins) if (p.last && cam) out.push(`pin${p.n}: ${Math.hypot(p.last.x - cam.x, p.last.z - cam.z).toFixed(2)} m away`);
   if (performance.now() < flashUntil) out.push('>> ' + flashText);
   $('hud').textContent = out.join('\n');
