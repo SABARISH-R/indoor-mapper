@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AR Nav – place recognition test</title>
+<style>
+  :root { --bg:#0e1a24; --ink:#eef3f6; --muted:#9fb3c1; --accent:#ffb02e; --ok:#3ddc84; --bad:#ff5a5a; --panel:#162838; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.45 system-ui, sans-serif; }
+  main { max-width:620px; margin:0 auto; padding:14px; }
+  h1 { font-size:22px; margin:4px 0 8px; }
+  p, li, small { color:var(--muted); }
+  button, select, input { font:600 16px system-ui; border:0; border-radius:10px; min-height:46px; }
+  button { padding:10px 14px; background:var(--accent); color:#1b1300; }
+  button.sec { background:#22384a; color:var(--ink); }
+  button:disabled { opacity:.45; }
+  select, input { background:#0b1520; color:var(--ink); padding:8px 10px; border:1px solid #2b4458; width:100%; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0; }
+  .row > * { flex:1 1 140px; }
+  .tabs { display:flex; gap:6px; margin:8px 0; }
+  .tabs button { flex:1; background:#22384a; color:var(--ink); }
+  .tabs button.on { background:var(--accent); color:#1b1300; }
+  #camwrap { position:relative; border-radius:12px; overflow:hidden; background:#000; aspect-ratio:3/4; max-height:56vh; margin:0 auto; }
+  video { width:100%; height:100%; object-fit:cover; display:block; }
+  #where { position:absolute; left:0; right:0; bottom:0; padding:12px 14px; background:linear-gradient(#0000,#000d); font:700 22px/1.25 system-ui; text-shadow:0 1px 3px #000; }
+  #where small { display:block; font:500 14px system-ui; color:#d6e2ea; }
+  #bar { position:absolute; left:0; right:0; top:0; height:6px; background:#0006; }
+  #bar i { display:block; height:100%; width:0; background:var(--ok); transition:width .2s; }
+  .panel { background:var(--panel); border-radius:12px; padding:12px; margin:10px 0; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  td { padding:6px 4px; border-bottom:1px solid #22384a; }
+  td.n { text-align:right; white-space:nowrap; }
+  #log { max-height:30vh; overflow:auto; font:12px/1.4 ui-monospace, monospace; background:#08121a; padding:10px; border-radius:8px; white-space:pre-wrap; color:#b9cbd6; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Place recognition test</h1>
+  <p id="status">Loading…</p>
+
+  <div class="tabs"><button id="tabRec" class="on">1. Record places</button><button id="tabLoc">2. Where am I?</button></div>
+
+  <div id="camwrap"><div id="bar"><i id="barfill"></i></div><video id="cam" playsinline muted></video><div id="where">Camera off<small></small></div></div>
+  <div class="row"><button id="camBtn">Start camera</button></div>
+
+  <section id="recPanel" class="panel">
+    <b>Record a place</b>
+    <p style="margin:4px 0 8px">Stand at the spot, phone at chest height pointing ahead. Tap Record and slowly turn about 30° left and right for 5 seconds. Record each spot once per direction you can face there.</p>
+    <div class="row">
+      <select id="spot"></select>
+      <input id="facing" placeholder="Facing… (e.g. towards Hall door)">
+    </div>
+    <div class="row"><button id="recBtn" disabled>Record 5 s</button></div>
+    <table id="lib"></table>
+  </section>
+
+  <section id="locPanel" class="panel hidden">
+    <b>Where am I?</b>
+    <p style="margin:4px 0 8px">Walk around holding the phone up, pointing ahead. The answer updates about 3 times a second; the green bar is the confidence.</p>
+    <table id="top"></table>
+    <div class="row"><button id="markRight" class="sec">It's right</button><button id="markWrong" class="sec">It's wrong</button></div>
+  </section>
+
+  <section class="panel">
+    <b>Library and log</b>
+    <div class="row">
+      <button id="exportBtn" class="sec">Save library file</button>
+      <label class="sec" style="flex:1 1 140px"><input id="importFile" type="file" accept=".json" class="hidden"><button class="sec" style="width:100%" onclick="document.getElementById('importFile').click()">Load library file</button></label>
+    </div>
+    <div class="row">
+      <button id="copyLog" class="sec">Copy log</button>
+      <button id="clearLog" class="sec">Clear log</button>
+      <button id="wipe" class="sec">Delete all places</button>
+    </div>
+    <div id="log"></div>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
+<script>
+{
+const VERSION = 'places v1';
+const $ = id => document.getElementById(id);
+
+// Spots from the house graph (nav-graph.json)
+const SPOTS = ['Sitout', 'G Hall', 'Dining', 'Stair bottom (Dining)', 'Stair landing', 'Kitchen A', 'Kitchen B', 'Wash', 'G WC',
+  'G Bedroom A', 'G Bedroom B', 'F1 Stair top', 'F1 Hall', 'F1 Bedroom A', 'F1 Bedroom B', 'WC A', 'WC B', 'Balcony', 'Terrace'];
+$('spot').innerHTML = SPOTS.map(s => `<option>${s}</option>`).join('');
+
+// ---------- log ----------
+let lines = [];
+try { lines = JSON.parse(localStorage.getItem('placesLog') || '[]'); } catch (e) {}
+function log(m) {
+  lines.push(`${new Date().toISOString().slice(11, 19)} ${m}`);
+  if (lines.length > 500) lines.splice(0, lines.length - 500);
+  try { localStorage.setItem('placesLog', JSON.stringify(lines)); } catch (e) {}
+  $('log').textContent = lines.slice(-80).join('\n');
+}
+window.addEventListener('error', e => log(`ERROR ${e.message} @${e.lineno}`));
+window.addEventListener('unhandledrejection', e => log(`ERROR ${e.reason}`));
+$('copyLog').onclick = async () => {
+  const lib = summary();
+  const text = [`${VERSION} | model ${modelName} | ${navigator.userAgent}`, `library: ${lib}`, ...lines].join('\n');
+  try { await navigator.clipboard.writeText(text); setStatus('Log copied. Paste it to Claude.'); } catch (e) { setStatus('Copy failed; long-press the log and copy.'); }
+};
+$('clearLog').onclick = () => { lines = []; log('log cleared'); };
+function setStatus(t) { $('status').textContent = t; }
+log(`--- ${VERSION} loaded`);
+
+// ---------- storage (IndexedDB) ----------
+let db;
+const dbReady = new Promise((res, rej) => {
+  const r = indexedDB.open('arnav-places', 1);
+  r.onupgradeneeded = () => r.result.createObjectStore('samples', { keyPath: 'id', autoIncrement: true });
+  r.onsuccess = () => { db = r.result; res(); };
+  r.onerror = () => rej(r.error);
+});
+let samples = [];   // { id, label, vec: Float32Array, t }
+const tx = (mode) => db.transaction('samples', mode).objectStore('samples');
+async function loadSamples() {
+  await dbReady;
+  samples = await new Promise(res => { const q = tx('readonly').getAll(); q.onsuccess = () => res(q.result.map(s => ({ ...s, vec: new Float32Array(s.vec) }))); });
+}
+function addSample(label, vec) {
+  return new Promise(res => { const q = tx('readwrite').add({ label, vec: Array.from(vec), t: Date.now() }); q.onsuccess = () => { samples.push({ id: q.result, label, vec }); res(); }; });
+}
+function deleteLabel(label) {
+  const store = tx('readwrite');
+  samples.filter(s => s.label === label).forEach(s => store.delete(s.id));
+  samples = samples.filter(s => s.label !== label);
+  log(`deleted ${label}`); renderLib();
+}
+$('wipe').onclick = () => { if (!samples.length) return; tx('readwrite').clear(); samples = []; renderLib(); log('all places deleted'); };
+
+function summary() {
+  const c = {}; samples.forEach(s => c[s.label] = (c[s.label] || 0) + 1);
+  return Object.keys(c).length ? Object.entries(c).map(([k, v]) => `${k} (${v})`).join('; ') : 'empty';
+}
+function renderLib() {
+  const c = {}; samples.forEach(s => c[s.label] = (c[s.label] || 0) + 1);
+  const rows = Object.entries(c).sort();
+  $('lib').innerHTML = rows.length
+    ? rows.map(([k, v]) => `<tr><td>${k}</td><td class="n">${v} views</td><td class="n"><button class="sec" data-del="${encodeURIComponent(k)}" style="min-height:36px;padding:4px 10px">Delete</button></td></tr>`).join('')
+    : '<tr><td>No places recorded yet.</td></tr>';
+  $('lib').querySelectorAll('[data-del]').forEach(b => b.onclick = () => deleteLabel(decodeURIComponent(b.dataset.del)));
+}
+
+// export / import (lets the library move between phones, or be built once for a whole building)
+$('exportBtn').onclick = () => {
+  const data = JSON.stringify({ version: VERSION, model: modelName, samples: samples.map(s => ({ label: s.label, vec: Array.from(s.vec, x => +x.toFixed(4)) })) });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([data], { type: 'application/json' }));
+  a.download = `places-library-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  log(`library saved: ${samples.length} views`);
+};
+$('importFile').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const data = JSON.parse(await f.text());
+  if (data.model !== modelName) { setStatus(`That file was made with ${data.model}; this phone uses ${modelName}. Not loaded.`); return; }
+  for (const s of data.samples) await addSample(s.label, new Float32Array(s.vec));
+  renderLib(); log(`library loaded: ${data.samples.length} views`);
+};
+
+// ---------- camera ----------
+const video = $('cam');
+let stream = null;
+$('camBtn').onclick = async () => {
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; $('camBtn').textContent = 'Start camera'; return; }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+    video.srcObject = stream; await video.play();
+    $('camBtn').textContent = 'Stop camera';
+    log(`camera on ${video.videoWidth}x${video.videoHeight}`);
+  } catch (e) { setStatus(`Camera blocked: ${e.message}. Allow camera access for this site.`); log(`camera error ${e.message}`); }
+};
+
+// ---------- image model ----------
+// MobileNet v2 embedding (1280 numbers per frame). Falls back to a simple colour+layout descriptor if the model can't load.
+let model = null, modelName = 'loading';
+const small = document.createElement('canvas'); small.width = 32; small.height = 24;
+const sctx = small.getContext('2d', { willReadFrequently: true });
+function simpleDescriptor() {
+  sctx.drawImage(video, 0, 0, 32, 24);
+  const d = sctx.getImageData(0, 0, 32, 24).data, v = new Float32Array(32 * 24 + 48);
+  let i = 0;
+  for (let p = 0; p < d.length; p += 4) v[i++] = (d[p] * .3 + d[p + 1] * .59 + d[p + 2] * .11) / 255;
+  for (let p = 0; p < d.length; p += 4) { v[768 + (d[p] >> 4)] += 1; v[784 + (d[p + 1] >> 4)] += 1; v[800 + (d[p + 2] >> 4)] += 1; }
+  return normalise(v);
+}
+function normalise(v) { let n = 0; for (const x of v) n += x * x; n = Math.sqrt(n) || 1; for (let i = 0; i < v.length; i++) v[i] /= n; return v; }
+async function embed() {
+  if (!video.videoWidth) return null;
+  if (!model) return simpleDescriptor();
+  const t = tf.tidy(() => model.infer(video, true));
+  const v = normalise(new Float32Array(await t.data()));
+  t.dispose();
+  return v;
+}
+(async () => {
+  await loadSamples(); renderLib();
+  try {
+    model = await mobilenet.load({ version: 2, alpha: 1.0 });
+    modelName = 'mobilenet_v2_1.0';
+    log(`model loaded (${tf.getBackend()})`);
+  } catch (e) {
+    modelName = 'simple';
+    log(`model failed (${e.message}); using simple descriptor`);
+  }
+  setStatus(`Ready. ${samples.length ? samples.length + ' views recorded.' : 'Start the camera, then record places.'}`);
+  $('recBtn').disabled = false;
+  loop();
+})();
+
+// ---------- record ----------
+let recording = null;   // { label, until, n }
+$('recBtn').onclick = () => {
+  if (!stream) { setStatus('Start the camera first.'); return; }
+  const facing = $('facing').value.trim();
+  const label = facing ? `${$('spot').value} → ${facing}` : $('spot').value;
+  recording = { label, until: performance.now() + 5000, n: 0 };
+  $('recBtn').disabled = true;
+  log(`recording ${label}`);
+};
+
+// ---------- recognise ----------
+const history = [];   // recent top labels for voting
+let lastShown = '';
+function rank(v) {
+  const best = {};
+  for (const s of samples) {
+    let dot = 0; const a = s.vec;
+    if (a.length !== v.length) continue;
+    for (let i = 0; i < v.length; i++) dot += a[i] * v[i];
+    if (!(s.label in best) || dot > best[s.label]) best[s.label] = dot;
+  }
+  return Object.entries(best).sort((a, b) => b[1] - a[1]);
+}
+let mode = 'rec';
+$('tabRec').onclick = () => { mode = 'rec'; $('tabRec').classList.add('on'); $('tabLoc').classList.remove('on'); $('recPanel').classList.remove('hidden'); $('locPanel').classList.add('hidden'); };
+$('tabLoc').onclick = () => { mode = 'loc'; $('tabLoc').classList.add('on'); $('tabRec').classList.remove('on'); $('locPanel').classList.remove('hidden'); $('recPanel').classList.add('hidden'); history.length = 0; log('--- locating'); };
+$('markRight').onclick = () => log(`USER: right (${lastShown})`);
+$('markWrong').onclick = () => log(`USER: WRONG (${lastShown})`);
+
+async function loop() {
+  const t0 = performance.now();
+  if (stream && video.videoWidth) {
+    const v = await embed();
+    if (v && recording) {
+      await addSample(recording.label, v); recording.n++;
+      $('where').innerHTML = `Recording ${recording.label}<small>${recording.n} views – turn slowly left and right</small>`;
+      $('barfill').style.width = `${Math.min(100, (1 - (recording.until - performance.now()) / 5000) * 100)}%`;
+      if (performance.now() > recording.until) {
+        log(`recorded ${recording.label}: ${recording.n} views`);
+        setStatus(`Saved ${recording.label} (${recording.n} views).`);
+        recording = null; $('recBtn').disabled = false; renderLib();
+      }
+    } else if (v && mode === 'loc' && samples.length) {
+      const r = rank(v);
+      const [l1, s1] = r[0], s2 = r[1] ? r[1][1] : 0;
+      history.push(l1); if (history.length > 9) history.shift();
+      const votes = {}; history.forEach(h => votes[h] = (votes[h] || 0) + 1);
+      const [winner, nv] = Object.entries(votes).sort((a, b) => b[1] - a[1])[0];
+      const conf = nv / history.length;
+      $('barfill').style.width = `${Math.round(conf * 100)}%`;
+      $('barfill').style.background = conf > 0.7 ? 'var(--ok)' : conf > 0.45 ? 'var(--accent)' : 'var(--bad)';
+      $('where').innerHTML = `${conf > 0.45 ? winner : 'Not sure…'}<small>match ${s1.toFixed(3)} vs next ${s2.toFixed(3)} · ${Math.round(conf * 100)}% of last ${history.length} frames</small>`;
+      $('top').innerHTML = r.slice(0, 4).map(([l, s]) => `<tr><td>${l}</td><td class="n">${s.toFixed(3)}</td></tr>`).join('');
+      if (winner !== lastShown && conf > 0.6) { log(`PLACE ${winner} (votes ${Math.round(conf * 100)}%, best ${s1.toFixed(3)}, margin ${(s1 - s2).toFixed(3)})`); lastShown = winner; }
+    } else if (!recording) {
+      $('where').innerHTML = mode === 'loc' ? 'Record some places first' : 'Ready to record<small>choose the spot below</small>';
+    }
+  }
+  setTimeout(loop, Math.max(30, 300 - (performance.now() - t0)));
+}
+}
+</script>
+</body>
+</html>
