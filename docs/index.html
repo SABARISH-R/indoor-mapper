@@ -58,7 +58,7 @@
 import * as THREE from 'three';
 
 const $ = id => document.getElementById(id);
-const VERSION = 'pin-test v1';
+const VERSION = 'pin-test v2';
 
 // ---------- logging (kept across reloads so a crash doesn't lose it) ----------
 const lines = [];
@@ -150,7 +150,13 @@ $('start').onclick = async () => {
   await renderer.xr.setSession(session);
   refSpace = renderer.xr.getReferenceSpace();
   const viewer = await session.requestReferenceSpace('viewer');
-  hitSource = await session.requestHitTestSource({ space: viewer });
+  try {
+    hitSource = await session.requestHitTestSource({ space: viewer, entityTypes: ['plane', 'point'] });
+    log('hit-test: planes + feature points');
+  } catch (e) {
+    hitSource = await session.requestHitTestSource({ space: viewer });
+    log('hit-test: planes only (' + e.message + ')');
+  }
   session.addEventListener('end', onEnd);
   renderer.setAnimationLoop(onFrame);
 };
@@ -177,19 +183,34 @@ $('clear').onclick = () => {
   log('pins cleared');
 };
 
-$('drop').onclick = async () => {
-  if (!lastHit) { log('drop: no floor under the circle'); return; }
+let dropRequested = false;
+$('drop').onclick = () => { dropRequested = true; };   // handled inside the next AR frame
+
+async function doDrop(frame, cam, camFwd) {
   const n = pins.length + 1;
+  let anchor, how;
   try {
-    const anchor = await lastHit.createAnchor();
-    const mesh = makePin(n);
-    scene.add(mesh);
-    pins.push({ n, anchor, mesh, first: null, last: null, lostFrames: 0 });
-    log(`pin${n} dropped (anchor created)`);
-  } catch (e) {
-    log(`pin${n} createAnchor failed: ${e.message}`);
-  }
-};
+    if (lastHit) {
+      anchor = await lastHit.createAnchor();
+      how = 'on detected surface';
+    } else if (cam && frame.createAnchor) {
+      // estimate: 1.5 m ahead, floor = 1.4 m below the phone
+      const f = new THREE.Vector3(camFwd.x, 0, camFwd.z).normalize();
+      const pos = { x: cam.x + f.x * 1.5, y: cam.y - 1.4, z: cam.z + f.z * 1.5, w: 1 };
+      anchor = await frame.createAnchor(new XRRigidTransform(pos), refSpace);
+      how = 'ESTIMATED (no surface found) 1.5 m ahead';
+    } else { flash('No floor found - move slowly'); log('drop: no surface and no fallback'); return; }
+  } catch (e) { log(`pin${n} createAnchor failed: ${e.message}`); flash('Pin failed'); return; }
+  const mesh = makePin(n);
+  scene.add(mesh);
+  pins.push({ n, anchor, mesh, first: null, last: null, lostFrames: 0 });
+  log(`pin${n} dropped ${how}`);
+  flash(`Pin ${n} dropped ${lastHit ? '' : '(estimated)'}`);
+  try { navigator.vibrate && navigator.vibrate(60); } catch {}
+}
+
+let flashUntil = 0, flashText = '';
+function flash(t) { flashText = t; flashUntil = performance.now() + 1500; }
 
 const m = new THREE.Matrix4(), v = new THREE.Vector3();
 
@@ -203,9 +224,11 @@ function onFrame(time, frame) {
   if (lost) lostFrames++;
   if (lost !== wasLost) { log(lost ? 'TRACKING LOST' : 'tracking resumed'); wasLost = lost; }
 
-  let cam = null;
+  let cam = null, camFwd = null;
   if (pose) {
     const p = pose.transform.position;
+    const q = pose.transform.orientation;
+    camFwd = new THREE.Vector3(0, 0, -1).applyQuaternion(new THREE.Quaternion(q.x, q.y, q.z, q.w));
     cam = new THREE.Vector3(p.x, p.y, p.z);
     if (!startCam) startCam = cam.clone();
     if (lastCam) { const d = Math.hypot(cam.x - lastCam.x, cam.z - lastCam.z); if (d > 0.01) { pathLen += d; lastCam = cam; } }
@@ -222,6 +245,7 @@ function onFrame(time, frame) {
     } else reticle.visible = false;
   }
   $('cross').classList.toggle('hit', !!lastHit);
+  if (dropRequested) { dropRequested = false; doDrop(frame, cam, camFwd); }
 
   // pins follow their anchors (ARCore moves anchors as its map improves)
   for (const p of pins) {
@@ -235,7 +259,7 @@ function onFrame(time, frame) {
   }
 
   // HUD
-  if (frames % 10 === 0) {
+  if (frames % 10 === 0 || performance.now() < flashUntil) {
     const lines = [lost ? 'TRACKING LOST - move slowly, point at textured areas' : 'Tracking OK',
                    `walked ${pathLen.toFixed(1)} m | lost frames ${lostFrames}`];
     for (const p of pins) {
@@ -243,7 +267,8 @@ function onFrame(time, frame) {
       const d = Math.hypot(p.last.x - cam.x, p.last.z - cam.z);
       lines.push(`pin${p.n}: ${d.toFixed(2)} m away, anchor shift ${(p.last.distanceTo(p.first) * 100).toFixed(1)} cm`);
     }
-    if (!lastHit) lines.push('Point the circle at the floor');
+    if (!lastHit) lines.push('No surface under circle - pins will be estimated');
+    if (performance.now() < flashUntil) lines.push('>> ' + flashText);
     $('hud').textContent = lines.join('\n');
   }
   if (frames % 300 === 0) log(`t=${(time / 1000).toFixed(0)}s walked=${pathLen.toFixed(1)}m lost=${lostFrames} pins=${pins.map(p => p.last && p.first ? (p.last.distanceTo(p.first) * 100).toFixed(1) + 'cm' : '-').join(',')}`);
