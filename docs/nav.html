@@ -58,7 +58,11 @@
     <b>Record a view</b>
     <p style="margin:4px 0 8px">Stand in the place, point the phone towards the next place, tap Record and turn slowly a little left and right for 5 s. Record every direction someone can walk from that place.</p>
     <div class="row"><label>I'm in<select id="recPlace"></select></label><label>facing towards<select id="recFacing"></select></label></div>
-    <div class="row"><button id="recBtn" disabled>Record 5 s</button></div>
+    <div class="row"><button id="recBtn" disabled>Record 6 s</button></div>
+    <hr style="border:0;border-top:1px solid #2b4458;margin:12px 0">
+    <b>Save a spot</b>
+    <p style="margin:4px 0 8px">Stand at the spot (e.g. by the TV, a counter, a sign). Choose the room you're in above, name the spot, tap Save, and turn slowly all the way round for 8 s.</p>
+    <div class="row"><input id="spotName" placeholder="Spot name, e.g. TV corner" style="background:#0b1520;color:var(--ink);padding:8px 10px;border:1px solid #2b4458;border-radius:10px;min-height:46px;font:600 16px system-ui"><button id="spotBtn" disabled>Save spot</button></div>
     <table id="lib"></table>
   </section>
 
@@ -77,11 +81,18 @@
   </section>
 </main>
 
+<script type="module">
+  try {
+    const T = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2/+esm');
+    window.HFT = T;
+  } catch (e) { window.HFT_ERROR = String(e); }
+  window.dispatchEvent(new Event('hft-ready'));
+</script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
 <script>
 {
-const VERSION = 'nav v3';
+const VERSION = 'nav v4';
 const $ = id => document.getElementById(id);
 
 // ---------- log ----------
@@ -98,13 +109,14 @@ window.addEventListener('unhandledrejection', e => log(`ERROR ${e.reason}`));
 const setStatus = t => $('status').textContent = t;
 $('clearLog').onclick = () => { lines = []; log('log cleared'); };
 $('copyLog').onclick = async () => {
-  const text = [`${VERSION} | model ${modelName} | views: ${libSummary()} | ${navigator.userAgent}`, ...lines].join('\n');
+  const text = [`${VERSION} | model ${modelName} (${modelKind}) | views: ${libSummary()} | ${navigator.userAgent}`, ...lines].join('\n');
   try { await navigator.clipboard.writeText(text); setStatus('Log copied. Paste it to Claude.'); } catch (e) { setStatus('Copy failed; long-press the log and copy.'); }
 };
 log(`--- ${VERSION} loaded`);
 
 // ---------- house graph ----------
-let G, N = {}, adj = {}, places = [], nameOf = id => (N[id] && N[id].name) || id;
+let G, N = {}, adj = {}, places = [];
+const nameOf = id => id && id.startsWith('spot:') ? id.slice(5) + ' (spot)' : (N[id] && N[id].name) || id || '';
 const floorZ = {};
 function nodeZ(n) { return n.z != null ? n.z : (floorZ[n.floor] || 0); }
 function bearing(a, b) {             // plan bearing, degrees clockwise from north (+y)
@@ -188,25 +200,33 @@ const dbReady = new Promise((res, rej) => {
 });
 const store = m => db.transaction('views', m).objectStore('views');
 async function loadViews() { await dbReady; views = await new Promise(res => { const q = store('readonly').getAll(); q.onsuccess = () => res(q.result.map(v => ({ ...v, vec: new Float32Array(v.vec) }))); }); }
-function addView(place, facing, heading, vec) {
-  return new Promise(res => { const q = store('readwrite').add({ place, facing, heading, vec: Array.from(vec), model: modelName }); q.onsuccess = () => { views.push({ id: q.result, place, facing, heading, vec }); res(); }; });
+function addView(place, facing, heading, vec, parent = null, model = modelName) {
+  return new Promise(res => { const q = store('readwrite').add({ place, facing, heading, parent, vec: Array.from(vec), model }); q.onsuccess = () => { views.push({ id: q.result, place, facing, heading, parent, vec, model }); res(); }; });
 }
+const usable = () => views.filter(v => v.model === modelName);
+const spotsList = () => { const m = {}; usable().forEach(v => { if (v.place.startsWith('spot:')) m[v.place] = v.parent; }); return m; };
 const key = v => `${v.place}|${v.facing}`;
-function libSummary() { const c = {}; views.forEach(v => c[key(v)] = (c[key(v)] || 0) + 1); return Object.keys(c).length + ' directions, ' + views.length + ' frames'; }
+function libSummary() { const u = usable(), c = {}; u.forEach(v => c[key(v)] = (c[key(v)] || 0) + 1); const old = views.length - u.length; return Object.keys(c).length + ' directions/spots, ' + u.length + ' frames' + (old ? ` (${old} frames from an older model, ignored)` : ''); }
 function renderLib() {
-  const c = {}; views.forEach(v => c[key(v)] = (c[key(v)] || 0) + 1);
+  const c = {}; usable().forEach(v => c[key(v)] = (c[key(v)] || 0) + 1);
   const rows = Object.entries(c).sort();
   $('lib').innerHTML = rows.length ? rows.map(([k, n]) => { const [p, f] = k.split('|');
-    return `<tr><td>${nameOf(p)} → ${nameOf(f)}</td><td class="n">${n}</td><td class="n"><button class="sec" data-k="${k}" style="min-height:34px;padding:4px 10px">Delete</button></td></tr>`; }).join('')
+    return `<tr><td>${p.startsWith('spot:') ? '★ ' + nameOf(p) + ' in ' + nameOf(spotsList()[p]) : nameOf(p) + ' → ' + nameOf(f)}</td><td class="n">${n}</td><td class="n"><button class="sec" data-k="${k}" style="min-height:34px;padding:4px 10px">Delete</button></td></tr>`; }).join('')
     : '<tr><td>No views recorded yet.</td></tr>';
   $('lib').querySelectorAll('[data-k]').forEach(b => b.onclick = () => {
     const s = store('readwrite'); views.filter(v => key(v) === b.dataset.k).forEach(v => s.delete(v.id));
-    views = views.filter(v => key(v) !== b.dataset.k); renderLib(); log(`deleted ${b.dataset.k}`);
+    views = views.filter(v => key(v) !== b.dataset.k); renderLib(); fillDest(); log(`deleted ${b.dataset.k}`);
   });
+}
+function fillDest() {
+  const keep = $('dest').value, sp = spotsList();
+  $('dest').innerHTML = `<optgroup label="Rooms">${places.map(id => `<option value="${id}">${nameOf(id)}</option>`).join('')}</optgroup>` +
+    (Object.keys(sp).length ? `<optgroup label="Saved spots">${Object.keys(sp).map(id => `<option value="${id}">${nameOf(id)} – ${nameOf(sp[id])}</option>`).join('')}</optgroup>` : '');
+  if (keep) $('dest').value = keep;
 }
 $('wipe').onclick = () => { store('readwrite').clear(); views = []; renderLib(); log('all views deleted'); };
 $('exportBtn').onclick = () => {
-  const data = JSON.stringify({ version: VERSION, model: modelName, views: views.map(v => ({ place: v.place, facing: v.facing, heading: v.heading, vec: Array.from(v.vec, x => +x.toFixed(4)) })) });
+  const data = JSON.stringify({ version: VERSION, model: modelName, views: usable().map(v => ({ place: v.place, facing: v.facing, heading: v.heading, parent: v.parent, vec: Array.from(v.vec, x => +x.toFixed(4)) })) });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([data], { type: 'application/json' }));
   a.download = `nav-library-${new Date().toISOString().slice(0, 10)}.json`; a.click();
@@ -217,8 +237,8 @@ $('importFile').onchange = async e => {
   const f = e.target.files[0]; if (!f) return;
   const d = JSON.parse(await f.text());
   if (d.model !== modelName) { setStatus(`File made with ${d.model}, this phone uses ${modelName}. Not loaded.`); return; }
-  for (const v of d.views) await addView(v.place, v.facing, v.heading, new Float32Array(v.vec));
-  renderLib(); log(`library loaded (${d.views.length} frames)`);
+  for (const v of d.views) await addView(v.place, v.facing, v.heading, new Float32Array(v.vec), v.parent || null);
+  renderLib(); fillDest(); log(`library loaded (${d.views.length} frames)`);
 };
 
 // ---------- camera + model ----------
@@ -232,10 +252,38 @@ $('camBtn').onclick = async () => {
   } catch (e) { setStatus(`Camera blocked: ${e.message}`); log(`camera error ${e.message}`); }
 };
 function normalise(v) { let n = 0; for (const x of v) n += x * x; n = Math.sqrt(n) || 1; for (let i = 0; i < v.length; i++) v[i] /= n; return v; }
+const frameCanvas = document.createElement('canvas'); frameCanvas.width = frameCanvas.height = 224;
+const fctx = frameCanvas.getContext('2d', { willReadFrequently: true });
 async function embed() {
   if (!video.videoWidth || !model) return null;
-  const t = tf.tidy(() => model.infer(video, true));
-  const v = normalise(new Float32Array(await t.data())); t.dispose(); return v;
+  if (modelKind === 'mobilenet') {
+    const t = tf.tidy(() => model.infer(video, true));
+    const v = normalise(new Float32Array(await t.data())); t.dispose(); return v;
+  }
+  // centre square crop -> 224x224 -> DINOv2 tokens [1, 1+P, D]; descriptor = [CLS, mean(patches)]
+  const w = video.videoWidth, h = video.videoHeight, sq = Math.min(w, h);
+  fctx.drawImage(video, (w - sq) / 2, (h - sq) / 2, sq, sq, 0, 0, 224, 224);
+  const out = await model(HFT.RawImage.fromCanvas(frameCanvas));
+  const [, T, D] = out.dims, data = out.data, v = new Float32Array(2 * D);
+  for (let d = 0; d < D; d++) v[d] = data[d];
+  for (let t = 1; t < T; t++) for (let d = 0; d < D; d++) v[D + d] += data[t * D + d] / (T - 1);
+  return normalise(v);
+}
+let modelKind = 'none';
+async function loadModel() {
+  if (!window.HFT && !window.HFT_ERROR) await new Promise(r => window.addEventListener('hft-ready', r, { once: true }));
+  if (window.HFT) {
+    const opts = navigator.gpu ? [{ device: 'webgpu', dtype: 'fp16' }, { dtype: 'q8' }] : [{ dtype: 'q8' }];
+    for (const o of opts) {
+      try {
+        setStatus('Downloading the place-recognition model (one time, about 25–45 MB)…');
+        model = await HFT.pipeline('image-feature-extraction', 'Xenova/dinov2-small', o);
+        modelKind = 'dinov2'; modelName = 'dinov2_small_cls_mean'; log(`model DINOv2 loaded (${o.device || 'wasm'}, ${o.dtype})`); return;
+      } catch (e) { log(`DINOv2 load failed (${o.device || 'wasm'}): ${e.message}`); }
+    }
+  } else log(`transformers.js failed: ${window.HFT_ERROR}`);
+  model = await mobilenet.load({ version: 2, alpha: 1.0 }); modelKind = 'mobilenet'; modelName = 'mobilenet_v2_1.0';
+  log(`fallback model MobileNet loaded (${tf.getBackend()})`);
 }
 
 // ---------- gyroscope heading (relative; corrected at every recognition) ----------
@@ -281,13 +329,21 @@ function fillFacing() {
   $('recFacing').innerHTML = opts.map(o => `<option value="${o.place}">${nameOf(o.place)}</option>`).join('');
 }
 let recording = null;
+$('spotBtn').onclick = () => {
+  if (!stream) { setStatus('Start the camera first.'); return; }
+  const name = $('spotName').value.trim().replace(/[|]/g, '');
+  if (!name) { setStatus('Type a name for the spot first.'); return; }
+  const room = $('recPlace').value;
+  recording = { place: 'spot:' + name, facing: '', heading: null, parent: room, until: performance.now() + 8000, dur: 8000, n: 0 };
+  $('recBtn').disabled = $('spotBtn').disabled = true; log(`saving spot "${name}" in ${room}`);
+};
 $('recBtn').onclick = () => {
   if (!stream) { setStatus('Start the camera first.'); return; }
   const place = $('recPlace').value, facing = $('recFacing').value;
   const rp = route(place, facing).path;
   const first = rp.find(id => placeOf(id) !== place) || rp[1];
-  recording = { place, facing, heading: bearing(N[place], N[first]), until: performance.now() + 5000, n: 0 };
-  $('recBtn').disabled = true; log(`recording ${place} → ${facing} (heading ${recording.heading.toFixed(0)}°)`);
+  recording = { place, facing, heading: bearing(N[place], N[first]), parent: null, until: performance.now() + 6000, dur: 6000, n: 0 };
+  $('recBtn').disabled = $('spotBtn').disabled = true; log(`recording ${place} → ${facing} (heading ${recording.heading.toFixed(0)}°)`);
 };
 
 // ---------- recognise + navigate ----------
@@ -298,7 +354,7 @@ $('dest').onchange = () => { hist.length = 0; arrived = false; log(`--- destinat
 
 const hist = [];          // recent best view keys
 let here = null;          // { place, facing, heading } last confirmed
-let fixGyro = null, fixHeading = null, lastFixAt = 0, arrived = false, lastLogged = '';
+let fixGyro = null, fixHeading = null, lastFixAt = 0, arrived = false, lastLogged = '', spotSeen = null, spotSeenAt = 0;
 const ctx = () => here ? `${here.place} facing ${here.facing}, plan heading ${(currentHeading() ?? -1).toFixed(0)}, gyro ${gyro == null ? 'off' : gyro.toFixed(0)}, steps ${steps} | ${lastLogged}` : 'no fix yet';
 $('markRight').onclick = () => log(`USER: arrow RIGHT (${ctx()})`);
 $('markWrong').onclick = () => log(`USER: arrow WRONG (${ctx()})`);
@@ -306,7 +362,7 @@ $('markWrong').onclick = () => log(`USER: arrow WRONG (${ctx()})`);
 function bestView(v) {
   const best = {};
   for (const w of views) {
-    if (w.vec.length !== v.length) continue;
+    if (w.model !== modelName || w.vec.length !== v.length) continue;
     let dot = 0; for (let i = 0; i < v.length; i++) dot += w.vec[i] * v[i];
     const k = key(w); if (!(k in best) || dot > best[k].s) best[k] = { s: dot, w };
   }
@@ -328,6 +384,17 @@ function navigateStep(v) {
   $('barfill').style.width = `${Math.round(conf * 100)}%`;
   $('barfill').style.background = conf > 0.7 ? 'var(--ok)' : conf > 0.45 ? 'var(--accent)' : 'var(--bad)';
   const [place, facing] = winKey.split('|');
+
+  // saved spot recognised
+  if (place.startsWith('spot:')) {
+    const parent = spotsList()[place];
+    if (hist.length >= 5 && conf >= 0.67) {
+      if (spotSeen !== place) log(`SPOT seen ${place} (${Math.round(conf * 100)}%, score ${r[0].s.toFixed(3)})`);
+      spotSeen = place; spotSeenAt = performance.now();
+      if (!here || here.place !== parent) { here = { place: parent, facing: here && here.place === parent ? here.facing : '', heading: null }; stepsAtFix = steps; }
+    }
+    render(); return;
+  }
 
   // accept a fix: confident, and either plausible or very confident (re-localise after e.g. a restart)
   const sameRoomTurn = here && here.place === place && here.facing !== facing;
@@ -388,27 +455,33 @@ function currentHeading() {
 }
 
 function render() {
-  const dest = $('dest').value;
+  const destSel = $('dest').value, isSpotDest = destSel.startsWith('spot:');
+  const dest = isSpotDest ? spotsList()[destSel] : destSel;
   if (!here) { $('instr').innerHTML = 'Finding where you are…<small>hold the phone up, pointing ahead, and turn slowly</small>'; $('arrow').style.display = 'none'; return; }
   const age = (performance.now() - lastFixAt) / 1000;
   if (here.place === dest) {
-    if (!arrived) { log(`ARRIVED ${dest}`); arrived = true; }
-    $('instr').innerHTML = `You have arrived<small>${nameOf(dest)}</small>`; $('arrow').style.display = 'none'; return;
+    if (isSpotDest && !(spotSeen === destSel && performance.now() - spotSeenAt < 4000)) {
+      $('arrow').style.display = 'none';
+      $('instr').innerHTML = `Look around for ${nameOf(destSel)}<small>you're in ${nameOf(dest)} – turn slowly until it says you're there</small>`;
+      return;
+    }
+    if (!arrived) { log(`ARRIVED ${destSel}`); arrived = true; }
+    $('instr').innerHTML = `You have arrived<small>${nameOf(destSel)}</small>`; $('arrow').style.display = 'none'; return;
   }
   const r = route(here.place, dest);
   if (!r) { $('instr').innerHTML = 'No route'; return; }
   const iNext = Math.max(1, r.path.findIndex(id => placeOf(id) !== here.place));
   const next = N[r.path[iNext]], kind = r.kinds[iNext - 1];
   const nextPlace = placesOn(r.path)[1];
-  const h = currentHeading(), b = bearing(N[here.place], next);
+  const h = here.heading == null ? null : currentHeading(), b = bearing(N[here.place], next);
   const turn = h == null ? 0 : ((b - h + 540) % 360) - 180;   // -180..180, + = right
-  $('arrow').style.display = 'block';
+  $('arrow').style.display = h == null ? 'none' : 'block';
   $('arrow').style.transform = `rotate(${turn}deg)`;
   $('arrow').style.opacity = age > 8 ? 0.4 : 1;
   const verb = kind === 'stair' ? (nodeZ(next) > nodeZ(N[here.place]) ? 'Take the stairs up' : 'Take the stairs down')
     : next.type === 'door' || next.type === 'opening' ? `Go through the door to ${nameOf(nextPlace)}` : `Go to ${nameOf(nextPlace)}`;
-  const dir = Math.abs(turn) < 25 ? 'ahead' : Math.abs(turn) > 150 ? 'behind you' : turn > 0 ? 'on your right' : 'on your left';
-  $('instr').innerHTML = `${verb}<small>${dir} · ${r.dist.toFixed(0)} m to go${age > 8 ? ' · point the phone ahead to refresh' : ''}</small><small>I think: in ${nameOf(here.place)}, facing ${nameOf(here.facing)}${gyro == null ? ' · sensors off' : ''}</small>`;
+  const dir = h == null ? 'point the phone at a doorway to get the arrow' : Math.abs(turn) < 25 ? 'ahead' : Math.abs(turn) > 150 ? 'behind you' : turn > 0 ? 'on your right' : 'on your left';
+  $('instr').innerHTML = `${verb}<small>${dir} · ${r.dist.toFixed(0)} m to go${age > 8 ? ' · point the phone ahead to refresh' : ''}</small><small>I think: in ${nameOf(here.place)}${here.facing ? ', facing ' + nameOf(here.facing) : ''}${gyro == null ? ' · sensors off' : ''}</small>`;
   $('routeText').textContent = 'Route: ' + placesOn(r.path).map(nameOf).join(' → ');
   drawPlan(r, h);
   const walked = (steps - stepsAtFix) * STEP_M;
@@ -423,13 +496,15 @@ async function loop() {
   if (stream && video.videoWidth && model) {
     const v = await embed();
     if (v && recording) {
-      await addView(recording.place, recording.facing, recording.heading, v); recording.n++;
-      $('instr').innerHTML = `Recording ${nameOf(recording.place)} → ${nameOf(recording.facing)}<small>${recording.n} frames – turn slowly a little left and right</small>`;
-      $('barfill').style.width = `${Math.min(100, (1 - (recording.until - performance.now()) / 5000) * 100)}%`;
+      await addView(recording.place, recording.facing, recording.heading, v, recording.parent); recording.n++;
+      const isSpot = recording.place.startsWith('spot:');
+      $('instr').innerHTML = isSpot ? `Saving ${nameOf(recording.place)}<small>${recording.n} frames – turn slowly all the way round</small>`
+        : `Recording ${nameOf(recording.place)} → ${nameOf(recording.facing)}<small>${recording.n} frames – turn slowly a little left and right</small>`;
+      $('barfill').style.width = `${Math.min(100, (1 - (recording.until - performance.now()) / recording.dur) * 100)}%`;
       if (performance.now() > recording.until) {
-        log(`recorded ${recording.place} → ${recording.facing}: ${recording.n} frames`);
-        setStatus(`Saved ${nameOf(recording.place)} → ${nameOf(recording.facing)}.`);
-        recording = null; $('recBtn').disabled = false; renderLib();
+        log(`recorded ${recording.place}${isSpot ? ' in ' + recording.parent : ' → ' + recording.facing}: ${recording.n} frames`);
+        setStatus(isSpot ? `Saved spot ${nameOf(recording.place)}.` : `Saved ${nameOf(recording.place)} → ${nameOf(recording.facing)}.`);
+        recording = null; $('recBtn').disabled = $('spotBtn').disabled = false; renderLib(); fillDest();
       }
     } else if (v && mode === 'nav') navigateStep(v);
     else if (!recording) $('instr').innerHTML = 'Ready to record<small>choose where you are and which way you face</small>';
@@ -443,12 +518,12 @@ async function loop() {
   await loadGraph();
   const opt = id => `<option value="${id}">${nameOf(id)}</option>`;
   $('recPlace').innerHTML = places.map(opt).join(''); $('recPlace').onchange = fillFacing; fillFacing();
-  $('dest').innerHTML = places.map(opt).join(''); $('dest').value = 'F1.bedroomB';
-  await loadViews(); renderLib();
-  try { model = await mobilenet.load({ version: 2, alpha: 1.0 }); modelName = 'mobilenet_v2_1.0'; log(`model loaded (${tf.getBackend()})`); }
+  await loadViews();
+  try { await loadModel(); }
   catch (e) { modelName = 'none'; log(`model failed: ${e.message}`); setStatus('Image model failed to load. Check the internet connection and reload.'); return; }
-  setStatus(`Ready. ${libSummary()}.`);
-  $('recBtn').disabled = false;
+  renderLib(); fillDest(); $('dest').value = 'F1.bedroomB';
+  setStatus(`Ready (${modelKind === 'dinov2' ? 'DINOv2' : 'MobileNet'}). ${libSummary()}.`);
+  $('recBtn').disabled = $('spotBtn').disabled = false;
   loop();
 })();
 }
