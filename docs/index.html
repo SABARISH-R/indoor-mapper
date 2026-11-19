@@ -33,9 +33,9 @@
   <h1>AR Nav – pin test</h1>
   <p>Measures how far a pin drifts from its real spot. Open in <b>Chrome on Android</b>.</p>
   <ol>
-    <li><b>Start AR</b>. Sweep the phone slowly over the floor, tilted down, until the circle turns <b style="color:var(--ok)">green</b> once. After that it also works <b style="color:var(--est)">yellow</b> (remembered floor height).</li>
-    <li>Put the circle on a tile corner, tap <b>Drop</b>.</li>
-    <li>Walk 3 m away slowly and come back.</li>
+    <li><b>Start AR</b>. Hold the phone at chest height pointing <b>ahead</b> (like filming the room), and slowly pan left and right for 5 seconds.</li>
+    <li>Look at the floor 1–2 m ahead until the circle turns <b style="color:var(--ok)">green</b>, put it on a tile corner, tap <b>Drop</b>.</li>
+    <li>Walk to another room and back at normal pace, phone <b>pointing ahead, not at your feet</b>. If the screen says "Lift the phone", raise it.</li>
     <li>Put the circle on the <b>real</b> tile corner again and tap <b>Check</b>. It shows the drift in cm.</li>
     <li><b>Exit</b> → <b>Copy log</b> → paste it to Claude.</li>
   </ol>
@@ -65,7 +65,7 @@
 import * as THREE from 'three';
 
 const $ = id => document.getElementById(id);
-const VERSION = 'pin-test v4';
+const VERSION = 'pin-test v5';
 
 // ---------- logging ----------
 let lines = [];
@@ -132,6 +132,7 @@ let lastHit = null;
 const pins = [];                  // { n, anchor, mesh, first, last, est, pathAtDrop }
 const path = [];                  // walked positions (x, z) every 10 cm
 let frames = 0, lostFrames = 0, wasLost = false, pathLen = 0, cam = null, camFwd = null, jumps = 0, prevCam = null;
+let pitchDeg = 0, steepMovingFrames = 0, movingFrames = 0, speed = 0;
 let action = null;                // 'drop' | 'check', run inside the next AR frame
 let flashText = '', flashUntil = 0;
 function flash(t) { flashText = t; flashUntil = performance.now() + 2500; try { navigator.vibrate && navigator.vibrate(50); } catch {} }
@@ -144,6 +145,7 @@ $('start').onclick = async () => {
   } catch (e) { log(`requestSession failed: ${e.message}`); $('status').textContent = `Could not start AR: ${e.message}`; return; }
   log('session started');
   for (const p of pins) scene.remove(p.mesh); pins.length = 0; path.length = 0; pathLen = 0; jumps = 0; prevCam = null; floorY = null;
+  steepMovingFrames = 0; movingFrames = 0; speed = 0;
   $('overlay').classList.add('on');
   renderer.domElement.style.display = 'block';
   renderer.xr.setReferenceSpaceType('local');
@@ -157,7 +159,7 @@ $('start').onclick = async () => {
 };
 
 function onEnd() {
-  log(`session ended. frames=${frames} lost=${lostFrames} walked=${pathLen.toFixed(1)}m pins=${pins.length}`);
+  log(`session ended. frames=${frames} lost=${lostFrames} walked=${pathLen.toFixed(1)}m pins=${pins.length} jumps=${jumps} walking-pointed-down=${movingFrames ? Math.round(100 * steepMovingFrames / movingFrames) : 0}%`);
   for (const p of pins) if (p.first && p.last) log(`pin${p.n}: ARCore moved its anchor ${(p.last.distanceTo(p.first) * 100).toFixed(1)} cm`);
   renderer.setAnimationLoop(null);
   session = null; hitSource = null;
@@ -213,8 +215,11 @@ function onFrame(time, frame) {
     const p = pose.transform.position, q = pose.transform.orientation;
     cam = new THREE.Vector3(p.x, p.y, p.z);
     camFwd = new THREE.Vector3(0, 0, -1).applyQuaternion(new THREE.Quaternion(q.x, q.y, q.z, q.w));
+    pitchDeg = Math.asin(Math.max(-1, Math.min(1, camFwd.y))) * 180 / Math.PI;   // -90 = straight down
     if (prevCam) {
       const step = cam.distanceTo(prevCam);
+      speed = speed * 0.9 + (step * 60) * 0.1;            // m/s, smoothed (about 60 fps)
+      if (speed > 0.25) { movingFrames++; if (pitchDeg < -55) steepMovingFrames++; }
       if (step > 0.3) { jumps++; log(`JUMP: position snapped ${step.toFixed(2)} m in one frame (tracking reset)`); flash(`Tracking jumped ${step.toFixed(1)} m - pins now unreliable`); }
     }
     prevCam = cam.clone();
@@ -258,12 +263,13 @@ function onFrame(time, frame) {
   }
 
   if (frames % 6 === 0) { drawHud(lost); drawMap(); }
-  if (frames % 300 === 0) log(`t=${(time / 1000).toFixed(0)}s walked=${pathLen.toFixed(1)}m lost=${lostFrames} floor=${floorY == null ? '-' : floorY.toFixed(2)}`);
+  if (frames % 300 === 0) log(`t=${(time / 1000).toFixed(0)}s walked=${pathLen.toFixed(1)}m lost=${lostFrames} jumps=${jumps} pitch=${pitchDeg.toFixed(0)}deg floor=${floorY == null ? '-' : floorY.toFixed(2)}`);
   renderer.render(scene, camera);
 }
 
 function drawHud(lost) {
-  const out = [lost ? 'TRACKING LOST - move slowly' : 'Tracking OK',
+  const steep = speed > 0.25 && pitchDeg < -55;
+  const out = [lost ? 'TRACKING LOST - move slowly' : steep ? '!! LIFT THE PHONE - point ahead, not at your feet' : 'Tracking OK',
     targetKind === 'surface' ? 'Floor: detected (green)' : targetKind === 'estimated' ? 'Floor: remembered (yellow)' :
       floorY == null ? 'Floor: sweep slowly, phone tilted down' : 'Floor: aim lower',
     `walked ${pathLen.toFixed(1)} m | jumps ${jumps}`];
